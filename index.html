@@ -1,0 +1,666 @@
+Aquí tienes una implementación básica del juego Galaga usando HTML, CSS y JavaScript con canvas.
+```html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Galaga Clásico - Nave vs Alienígenas</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background: linear-gradient(145deg, #03030f 0%, #000000 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', 'VT323', monospace;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px 25px 20px;
+            border-radius: 40px;
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.3), inset 0 0 8px rgba(0, 255, 255, 0.2);
+            border: 1px solid #0ff3;
+        }
+
+        canvas {
+            display: block;
+            box-shadow: 0 0 0 3px #0ff3, 0 10px 25px rgba(0,0,0,0.5);
+            border-radius: 8px;
+            cursor: none;
+            background-color: #010118;
+        }
+
+        .info-panel {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            color: #6effe8;
+            text-shadow: 0 0 5px #0ff;
+            font-weight: bold;
+            font-size: 1.6rem;
+            letter-spacing: 2px;
+            background: #02101f90;
+            padding: 8px 20px;
+            border-radius: 40px;
+            backdrop-filter: blur(2px);
+            border: 1px solid #0ff6;
+        }
+
+        .score-label, .lives-label {
+            display: flex;
+            gap: 12px;
+            align-items: baseline;
+        }
+
+        .score-label span:first-child, .lives-label span:first-child {
+            font-size: 1rem;
+            color: #7ffff0;
+        }
+
+        button {
+            background: #0a2f2f;
+            border: none;
+            font-family: inherit;
+            font-size: 1.2rem;
+            font-weight: bold;
+            padding: 6px 18px;
+            border-radius: 60px;
+            color: #b0fff0;
+            text-shadow: 0 0 3px cyan;
+            box-shadow: 0 0 5px cyan;
+            cursor: pointer;
+            transition: 0.1s linear;
+            margin-top: 5px;
+        }
+
+        button:hover {
+            background: #1ba5a5;
+            color: black;
+            box-shadow: 0 0 12px cyan;
+            transform: scale(0.97);
+        }
+
+        .controls {
+            display: flex;
+            gap: 18px;
+            font-size: 0.75rem;
+            background: #000000aa;
+            padding: 5px 15px;
+            border-radius: 50px;
+            color: #8bffff;
+        }
+
+        @media (max-width: 550px) {
+            .info-panel { font-size: 1.1rem; padding: 5px 12px;}
+            .controls { font-size: 0.6rem;}
+            button { font-size: 0.9rem; padding: 4px 14px;}
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="game-container">
+        <canvas id="gameCanvas" width="800" height="550"></canvas>
+        <div class="info-panel">
+            <div class="score-label">🔫 SCORE: <span id="scoreValue">0</span></div>
+            <div class="lives-label">🛸 LIVES: <span id="livesValue">3</span></div>
+            <button id="resetButton">🔄 REINICIAR</button>
+        </div>
+        <div class="controls">
+            🎮 ← →  mover nave &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 [ESPACIO] o [CLICK] disparar &nbsp;&nbsp;|&nbsp;&nbsp; 👽 Destruye los 8 aliens
+        </div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ----- CONFIGURACIÓN -----
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Dimensiones fijas
+        const W = 800, H = 550;
+        canvas.width = W;
+        canvas.height = H;
+        
+        // ----- Elementos del juego -----
+        let score = 0;
+        let lives = 3;
+        let gameOver = false;
+        let animationId = null;
+        
+        // Nave
+        const SHIP_WIDTH = 36;
+        const SHIP_HEIGHT = 28;
+        let shipX = W/2 - SHIP_WIDTH/2;
+        const shipY = H - 60;
+        let shipSpeed = 6;
+        let canShoot = true;
+        let shootCooldown = 0;      // frames hasta próximo disparo
+        const COOLDOWN_MAX = 12;     // cadencia justa
+        
+        // Balas del jugador
+        let bullets = [];
+        const BULLET_W = 4;
+        const BULLET_H = 10;
+        const BULLET_SPEED = -7;
+        
+        // Enemigos (Aliens tipo Galaga)
+        let enemies = [];
+        const ENEMY_W = 38;
+        const ENEMY_H = 32;
+        let enemyDirection = 1;   // 1 derecha, -1 izquierda
+        let enemyMoveDown = false;
+        let enemyEdgeTrigger = false;
+        let enemyBulletCooldown = 0;
+        const ENEMY_SHOOT_DELAY_FRAMES = 45; // cada ~0.75 seg a 60fps
+        
+        // Balas enemigas
+        let enemyBullets = [];
+        const ENEMY_BULLET_W = 5;
+        const ENEMY_BULLET_H = 10;
+        const ENEMY_BULLET_SPEED = 4.5;
+        
+        // Efectos visuales (explosiones minis)
+        let explosions = [];
+        
+        // ----- Helper de colisiones (rectángulos)-----
+        function rectCollide(r1, r2) {
+            return !(r2.x > r1.x + r1.w ||
+                r2.x + r2.w < r1.x ||
+                r2.y > r1.y + r1.h ||
+                r2.y + r2.h < r1.y);
+        }
+        
+        // ----- Agregar explosión chica -----
+        function addExplosion(x, y) {
+            explosions.push({ x: x, y: y, life: 8 });
+        }
+        
+        // ----- Inicializar / Reiniciar enemigos -----
+        function initEnemies() {
+            const enemiesArray = [];
+            // filas: 2 filas, 4 columnas = 8 aliens (estilo galaga simple)
+            const rows = 2;
+            const cols = 4;
+            const startX = 120;
+            const startY = 70;
+            const spacingX = 95;
+            const spacingY = 70;
+            
+            for(let row = 0; row < rows; row++) {
+                for(let col = 0; col < cols; col++) {
+                    enemiesArray.push({
+                        x: startX + col * spacingX,
+                        y: startY + row * spacingY,
+                        w: ENEMY_W,
+                        h: ENEMY_H,
+                        alive: true,
+                        type: row === 0 ? 'fly' : 'beetle'  // solo estética
+                    });
+                }
+            }
+            return enemiesArray;
+        }
+        
+        // ----- Reset completo del juego -----
+        function resetGame() {
+            gameOver = false;
+            score = 0;
+            lives = 3;
+            bullets = [];
+            enemyBullets = [];
+            explosions = [];
+            shipX = W/2 - SHIP_WIDTH/2;
+            canShoot = true;
+            shootCooldown = 0;
+            enemyBulletCooldown = 10; // pequeño retardo inicial
+            
+            // Inicializar enemigos vivos
+            enemies = initEnemies();
+            enemyDirection = 1;
+            enemyMoveDown = false;
+            enemyEdgeTrigger = false;
+            
+            updateUI();
+            
+            // si hay animación corriendo, no reiniciar bucle doble
+        }
+        
+        // Actualizar puntuación y vidas en DOM
+        function updateUI() {
+            document.getElementById('scoreValue').innerText = score;
+            document.getElementById('livesValue').innerText = lives;
+        }
+        
+        // ----- Disparo de nave (si no game over y puede disparar)
+        function shootFromShip() {
+            if(gameOver) return false;
+            if(!canShoot) return false;
+            bullets.push({
+                x: shipX + SHIP_WIDTH/2 - BULLET_W/2,
+                y: shipY - 8,
+                w: BULLET_W,
+                h: BULLET_H
+            });
+            canShoot = false;
+            shootCooldown = COOLDOWN_MAX;
+            // pequeño sonido imaginario (solo visual)  
+            return true;
+        }
+        
+        // ----- Actualizar lógica general -----
+        function updateGame() {
+            if(gameOver) return;
+            
+            // 1. Cooldown de disparo
+            if(shootCooldown > 0) {
+                shootCooldown--;
+                if(shootCooldown === 0) canShoot = true;
+            }
+            
+            // 2. Movimiento de la nave (teclas laterales)
+            //    Las teclas se manejan en eventos aparte, pero aplicamos límites aquí también
+            //    Solo necesitamos asegurar que shipX está dentro
+            if(shipX < 5) shipX = 5;
+            if(shipX + SHIP_WIDTH > W - 5) shipX = W - SHIP_WIDTH - 5;
+            
+            // 3. Actualizar balas del jugador (movimiento y colisiones)
+            for(let i=0; i<bullets.length; i++) {
+                bullets[i].y += BULLET_SPEED;
+                // eliminar si fuera de pantalla
+                if(bullets[i].y + bullets[i].h < 0 || bullets[i].y > H) {
+                    bullets.splice(i,1);
+                    i--;
+                    continue;
+                }
+                
+                let hit = false;
+                // colisión con enemigos
+                for(let j=0; j<enemies.length; j++) {
+                    const e = enemies[j];
+                    if(!e.alive) continue;
+                    const enemyRect = { x: e.x, y: e.y, w: e.w, h: e.h };
+                    const bulletRect = { x: bullets[i].x, y: bullets[i].y, w: BULLET_W, h: BULLET_H };
+                    if(rectCollide(enemyRect, bulletRect)) {
+                        // Destruir enemigo
+                        e.alive = false;
+                        hit = true;
+                        score += 10;
+                        updateUI();
+                        addExplosion(e.x + e.w/2, e.y + e.h/2);
+                        break;
+                    }
+                }
+                if(hit) {
+                    bullets.splice(i,1);
+                    i--;
+                }
+            }
+            
+            // 4. Mover y gestionar enemigos (formación)
+            let allDead = true;
+            let leftMost = W;
+            let rightMost = 0;
+            for(let e of enemies) {
+                if(e.alive) {
+                    allDead = false;
+                    if(e.x < leftMost) leftMost = e.x;
+                    if(e.x + e.w > rightMost) rightMost = e.x + e.w;
+                }
+            }
+            
+            // VICTORIA: si no quedan enemigos vivos
+            if(allDead && enemies.length > 0) {
+                gameOver = true;
+                // mensaje de victoria
+                return;
+            }
+            
+            // Movimiento de oleada (si hay enemigos)
+            if(!allDead) {
+                let shiftX = 2.2 * enemyDirection;
+                let shiftY = 0;
+                // verificar límites para bajar
+                if((enemyDirection === 1 && rightMost + shiftX >= W - 20) || (enemyDirection === -1 && leftMost + shiftX <= 20)) {
+                    enemyDirection *= -1;
+                    shiftY = 18;   // bajan al tocar borde
+                    enemyMoveDown = true;
+                } else {
+                    shiftY = 0;
+                }
+                
+                // aplicar desplazamiento a los enemigos vivos
+                for(let e of enemies) {
+                    if(e.alive) {
+                        e.x += shiftX;
+                        e.y += shiftY;
+                        // seguridad extra para que no se salgan verticalmente (pero nunca pasa mucho)
+                        if(e.y + e.h > H - 100) e.y = H - 110;
+                        if(e.y < 30) e.y = 30;
+                    }
+                }
+                
+                // si bajaron, reset bandera (solo para evitar doble bajada por frame)
+                if(enemyMoveDown) enemyMoveDown = false;
+            }
+            
+            // 5. Disparos enemigos (aleatorio controlado)
+            if(enemyBulletCooldown <= 0 && !allDead && !gameOver) {
+                // elegir un enemigo vivo al azar para disparar
+                let aliveEnemies = enemies.filter(e => e.alive);
+                if(aliveEnemies.length > 0) {
+                    let shooter = aliveEnemies[Math.floor(Math.random() * aliveEnemies.length)];
+                    enemyBullets.push({
+                        x: shooter.x + shooter.w/2 - ENEMY_BULLET_W/2,
+                        y: shooter.y + shooter.h,
+                        w: ENEMY_BULLET_W,
+                        h: ENEMY_BULLET_H
+                    });
+                }
+                enemyBulletCooldown = ENEMY_SHOOT_DELAY_FRAMES;
+            } else {
+                enemyBulletCooldown--;
+            }
+            
+            // 6. Actualizar balas enemigas y colisiones con nave
+            for(let i=0; i<enemyBullets.length; i++) {
+                enemyBullets[i].y += ENEMY_BULLET_SPEED;
+                if(enemyBullets[i].y > H + 50 || enemyBullets[i].y + ENEMY_BULLET_H < 0) {
+                    enemyBullets.splice(i,1);
+                    i--;
+                    continue;
+                }
+                
+                const shipRect = { x: shipX, y: shipY, w: SHIP_WIDTH, h: SHIP_HEIGHT };
+                const ebRect = { x: enemyBullets[i].x, y: enemyBullets[i].y, w: ENEMY_BULLET_W, h: ENEMY_BULLET_H };
+                if(rectCollide(shipRect, ebRect)) {
+                    // Impacto en la nave
+                    lives--;
+                    updateUI();
+                    addExplosion(shipX + SHIP_WIDTH/2, shipY + SHIP_HEIGHT/2);
+                    enemyBullets.splice(i,1);
+                    if(lives <= 0) {
+                        gameOver = true;
+                        return;
+                    }
+                    i--;
+                    // reinicio de posición de nave (no desaparece, solo pierde vida)
+                    // además, por dificultad justa, removemos balas cercanas? queda así.
+                }
+            }
+            
+            // 7. Colisión directa entre nave y enemigos (muerte instantánea)
+            const shipCollRect = { x: shipX, y: shipY, w: SHIP_WIDTH, h: SHIP_HEIGHT };
+            for(let i=0; i<enemies.length; i++) {
+                const e = enemies[i];
+                if(!e.alive) continue;
+                const enemyRect = { x: e.x, y: e.y, w: e.w, h: e.h };
+                if(rectCollide(shipCollRect, enemyRect)) {
+                    lives--;
+                    updateUI();
+                    addExplosion(shipX + SHIP_WIDTH/2, shipY + SHIP_HEIGHT/2);
+                    // Destruir también al enemigo que chocó (para no castigar excesivo)
+                    e.alive = false;
+                    if(lives <= 0) {
+                        gameOver = true;
+                        return;
+                    }
+                    // rompemos el bucle porque ya puede haber muerte, pero continuar
+                    break;
+                }
+            }
+            
+            // si gameOver por vidas, salir
+            if(gameOver) return;
+        }
+        
+        // ----- DIBUJO completo con estilo retro & Galaga feel -----
+        function draw() {
+            ctx.clearRect(0, 0, W, H);
+            
+            // Fondo estrellado
+            ctx.fillStyle = "#010018";
+            ctx.fillRect(0, 0, W, H);
+            for(let i=0; i<180; i++) {
+                if(i%2 === 0) continue; // random fijo
+                ctx.fillStyle = `rgba(255,240,200,${Math.sin(Date.now()*0.002+i)*0.3+0.4})`;
+                ctx.fillRect( (i*131)%W, (i*57)%H, 2, 2);
+            }
+            
+            // ---- Nave Jugador (estilo Galaga) ----
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.shadowColor = "#0ff";
+            // Cuerpo principal nave
+            ctx.fillStyle = "#3cc7ff";
+            ctx.beginPath();
+            // diseño: ala central y laterales
+            const sx = shipX, sy = shipY;
+            ctx.moveTo(sx + SHIP_WIDTH/2, sy);
+            ctx.lineTo(sx + SHIP_WIDTH-8, sy + SHIP_HEIGHT-6);
+            ctx.lineTo(sx + SHIP_WIDTH-12, sy + SHIP_HEIGHT-2);
+            ctx.lineTo(sx + SHIP_WIDTH/2, sy + SHIP_HEIGHT-4);
+            ctx.lineTo(sx + 12, sy + SHIP_HEIGHT-2);
+            ctx.lineTo(sx + 8, sy + SHIP_HEIGHT-6);
+            ctx.fill();
+            ctx.fillStyle = "#7ff5ff";
+            ctx.beginPath();
+            ctx.rect(sx + SHIP_WIDTH/2-5, sy-4, 10, 8);
+            ctx.fill();
+            ctx.fillStyle = "#22aaff";
+            ctx.beginPath();
+            ctx.rect(sx+10, sy+SHIP_HEIGHT-10, 6, 8);
+            ctx.rect(sx+SHIP_WIDTH-16, sy+SHIP_HEIGHT-10, 6, 8);
+            ctx.fill();
+            // detalles
+            ctx.fillStyle = "#f0f0ff";
+            ctx.beginPath();
+            ctx.arc(sx+SHIP_WIDTH/2, sy+SHIP_HEIGHT-12, 5, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = "#0aa";
+            ctx.beginPath();
+            ctx.arc(sx+SHIP_WIDTH/2, sy+SHIP_HEIGHT-12, 2.5, 0, Math.PI*2);
+            ctx.fill();
+            ctx.restore();
+            
+            // ---- Enemigos (alienígenas) ----
+            for(let e of enemies) {
+                if(!e.alive) continue;
+                ctx.save();
+                ctx.shadowBlur = 2;
+                ctx.shadowColor = "#f0f";
+                // Color verde / morado según tipo
+                if(e.type === 'fly') {
+                    ctx.fillStyle = "#cb5eff";
+                    ctx.strokeStyle = "#ff99ff";
+                } else {
+                    ctx.fillStyle = "#3eff9e";
+                    ctx.strokeStyle = "#bfff88";
+                }
+                ctx.beginPath();
+                // cuerpo alien redondeado con pinzas
+                ctx.ellipse(e.x + e.w/2, e.y + e.h/2-2, e.w/2.2, e.h/2.5, 0, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = "#000";
+                ctx.beginPath();
+                ctx.arc(e.x + e.w*0.35, e.y + e.h*0.4, 4, 0, Math.PI*2);
+                ctx.arc(e.x + e.w*0.65, e.y + e.h*0.4, 4, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = "#fff9c0";
+                ctx.beginPath();
+                ctx.ellipse(e.x + e.w/2, e.y + e.h*0.7, 6, 3, 0, 0, Math.PI*2);
+                ctx.fill();
+                // antenas
+                ctx.beginPath();
+                ctx.moveTo(e.x+12, e.y-3);
+                ctx.lineTo(e.x+18, e.y-12);
+                ctx.lineTo(e.x+24, e.y-3);
+                ctx.fillStyle = "#ff6699";
+                ctx.fill();
+                ctx.restore();
+            }
+            
+            // ---- Balas del jugador (láser) ----
+            for(let b of bullets) {
+                ctx.fillStyle = "#ffff60";
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = "yellow";
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                ctx.fillStyle = "white";
+                ctx.fillRect(b.x+1, b.y, b.w-2, b.h);
+            }
+            
+            // ---- Balas enemigas (proyectiles verdes) ----
+            for(let eb of enemyBullets) {
+                ctx.fillStyle = "#ff5e4d";
+                ctx.shadowBlur = 5;
+                ctx.fillRect(eb.x, eb.y, eb.w, eb.h);
+                ctx.fillStyle = "#ffaa77";
+                ctx.fillRect(eb.x+1, eb.y+2, eb.w-2, eb.h-4);
+            }
+            
+            // ---- Explosiones ----
+            for(let i=0; i<explosions.length; i++) {
+                let exp = explosions[i];
+                let size = (8 - exp.life) * 1.5;
+                ctx.fillStyle = `rgba(255, 80, 40, ${exp.life/8})`;
+                ctx.beginPath();
+                ctx.arc(exp.x, exp.y, size+2, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = `rgba(255, 200, 20, ${exp.life/7})`;
+                ctx.beginPath();
+                ctx.arc(exp.x-2, exp.y-1, size*0.7, 0, Math.PI*2);
+                ctx.fill();
+                exp.life--;
+                if(exp.life <= 0) {
+                    explosions.splice(i,1);
+                    i--;
+                }
+            }
+            
+            // ---- Game Over / Mensaje Victoria ---
+            if(gameOver) {
+                ctx.font = "bold 32monospace";
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = "#ff33cc";
+                ctx.shadowColor = "#ff0099";
+                let msg = "";
+                let allEnemiesDead = enemies.length > 0 && enemies.every(e => !e.alive);
+                if(allEnemiesDead && lives > 0) msg = "✨ ¡VICTORIA! ✨";
+                else if(lives <= 0) msg = "💀 GAME OVER 💀";
+                else msg = "💀 GAME OVER 💀";
+                ctx.fillText(msg, W/2 - ctx.measureText(msg).width/2, H/2 - 40);
+                ctx.font = "18px monospace";
+                ctx.fillStyle = "#88ddff";
+                ctx.fillText("Pulsa REINICIAR para continuar", W/2-150, H/2+40);
+            }
+            
+            // ---- Indicador de escudo / vida restante (extra UI) ----
+            ctx.font = "bold 14px monospace";
+            ctx.fillStyle = "#aaffdd";
+            ctx.fillText("←→ MOVE   ⚡ FIRE", 20, H-15);
+            
+            // ---- Resplandor de la nave al disparar ----
+            if(!canShoot && shootCooldown > 5) {
+                ctx.fillStyle = "#ffffa080";
+                ctx.beginPath();
+                ctx.arc(shipX+SHIP_WIDTH/2, shipY-5, 12, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+        
+        // ----- CONTROL DE TECLADO -----
+        const keys = {
+            ArrowLeft: false,
+            ArrowRight: false,
+            Space: false
+        };
+        
+        function handleInput() {
+            if(gameOver) return;
+            if(keys.ArrowLeft) shipX -= shipSpeed;
+            if(keys.ArrowRight) shipX += shipSpeed;
+            // límites en update también, pero aquí para inmediatez
+            if(shipX < 5) shipX = 5;
+            if(shipX + SHIP_WIDTH > W - 5) shipX = W - SHIP_WIDTH - 5;
+            
+            if(keys.Space) {
+                shootFromShip();
+                // prevenir ráfaga excesiva, pero la lógica de cooldown lo controla, y además evitamos múltiples por frame
+                keys.Space = false; // para que dispare una sola vez por pulsación, pero lo dejamos manual
+            }
+        }
+        
+        // Eventos teclado
+        window.addEventListener('keydown', (e) => {
+            if(e.key === 'ArrowLeft') {
+                keys.ArrowLeft = true;
+                e.preventDefault();
+            } else if(e.key === 'ArrowRight') {
+                keys.ArrowRight = true;
+                e.preventDefault();
+            } else if(e.key === ' ' || e.key === 'Space') {
+                if(!gameOver) {
+                    shootFromShip();
+                }
+                e.preventDefault();
+                keys.Space = false; // para evitar auto-repetición demasiado rápida
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            if(e.key === 'ArrowLeft') keys.ArrowLeft = false;
+            if(e.key === 'ArrowRight') keys.ArrowRight = false;
+            if(e.key === ' ' || e.key === 'Space') keys.Space = false;
+            e.preventDefault();
+        });
+        
+        // Para móvil / click en canvas (disparo)
+        canvas.addEventListener('click', (e) => {
+            if(!gameOver) {
+                shootFromShip();
+                e.preventDefault();
+            }
+        });
+        
+        // Prevenir contexto en canvas con botón derecho
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        
+        // Botón reinicio
+        document.getElementById('resetButton').addEventListener('click', () => {
+            resetGame();
+        });
+        
+        // ----- Loop principal Animación -----
+        function gameLoop() {
+            handleInput();
+            updateGame();
+            draw();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+        
+        // Inicializar todo
+        resetGame();
+        gameLoop();
+        
+        // Opcional: asegurar que en game over no se mueva nave pero handleInput lo corta por gameOver
+    })();
+</script>
+</body>
+</html>
+```
